@@ -227,6 +227,7 @@ def press_and_get_cords(event):
 	global selected_points
 	global time_vals
 	global my_plot
+	global show_suggestions_axes; global im_hint_off_1
 	if event.inaxes != my_plot.axes:
 		return
 	if event.xdata != None and event.xdata > time_vals[-1]:
@@ -241,6 +242,7 @@ def press_and_get_cords(event):
 		selected_points.append((x,y))
 		#	for debug
 		print('user pressed: ' + point_str)
+		show_suggestions_axes.images[0].set_data(im_hint_off_1)
 		show_selected_point(x)
 
 

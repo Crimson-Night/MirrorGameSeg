@@ -21,11 +21,7 @@ LOWEST_PENALTY = 0
 
 MAX_PENALTY = INFINITY
 
-SCORE_MARGIN = 5000
-# This value determines the weight of the users' ranking in the segmentation process.
-# The higher the value, the heavier role the users' ranking take place.
-
-DELTA = 0.5 
+DELTA = 1.75
 # How far do we allow two points to be recognized as the same one.
 # Used for both the segmentation compatability calculation and for
 # the suggestion feature.
@@ -33,19 +29,20 @@ DELTA = 0.5
 GRANULARITY = 0.02
 PRECISION = 2 # according to the granularity
 ROUND_LIMIT = 0.5 # if >= round up, else round down
-# These 3 paramters should fit the the granularity of graphs in the data sets.
+# These 3 paramters should fit the the granularity of the graphs in the data sets.
 
-ALLOWED_GAP = 100
-AVG_GRAPH_SIZE = 2980
-TRESHHOLD = AVG_GRAPH_SIZE * ALLOWED_GAP
+TRESHOLD_COEF = 30
+TRESHOLD = 0
 # The most important feature for the segmentation.
 # We use this paremeter to build our master's pool, which is the key component
 # of the segmentation proces.
 # The greater value is, the pool will be less strict when comparing two segments.
 # Lower bound == 0.
-# NOTE: Currently the value is hard coded and was decided according to current data-set
-# In the future we could calculate this value per data set, we havn't done it at the moment
-# In order to save run time.
+# The treshold will be calculted w.r.t the pool's segement in comparison.
+
+PENALTY_MARGIN = 2000
+# The higher the value the more weight the algorithm gives to the users's ranking
+
 
 MAX_SUGGESTIONS = 3 
 # Max number of suggestions offered to a user upon mouse-click
@@ -357,7 +354,11 @@ class Segmentation:
                     trainedSeg = trained[0]
                     trainedRank = trained[1]
                     (bestMatchIdx, penalty) = self.ScanPoolForMatch(trainedSeg)
-                    if penalty <= TRESHHOLD:
+                    if not self.pool:
+                        TRESHOLD = LOWEST_PENALTY
+                    else:
+                        TRESHOLD = TRESHOLD_COEF * len(self.pool[bestMatchIdx][0])
+                    if penalty <= TRESHOLD:
                         knownSeg = self.pool[bestMatchIdx][0]
                         knownRank = self.pool[bestMatchIdx][1]
                         self.pool[bestMatchIdx] = (knownSeg, knownRank + trainedRank)
@@ -407,30 +408,38 @@ class Segmentation:
         lastGraphSize = INFINITY
         onSegmentation = graph[:]
         while_iter = 1 #dbg
-        while (len(onSegmentation) != lastGraphSize):
+        while len(onSegmentation) != lastGraphSize:
             bestInterval = ()
             bestPenalty = MAX_PENALTY
             bestRank = 0
             for_iter = 1 #dbg
             for (segment, rank) in self.pool:
-                print('Scanning #' + str(for_iter) + ' segment on the graph.') #dbg
+                print ('Scanning #' + str(for_iter) + ' segment on the graph.') #dbg
                 for_iter += 1 #dbg
                 (startIdx, endIdx, penalty) = self.ScanGraphForMatch(segment, onSegmentation)
-                if abs(penalty - bestPenalty) < SCORE_MARGIN:
+                print ('penalty is '+ str(penalty))
+                print ('best penalty is '+ str(bestPenalty))
+                print ('interval: ')
+                print (startIdx)
+                print (endIdx)
+                if abs(penalty - bestPenalty) < PENALTY_MARGIN:
+                    # Ranking out weights
                     if rank > bestRank:
                         bestInterval = (onSegmentation[startIdx][0], onSegmentation[endIdx][0])
-                        bestPenalty = penalty 
+                        bestPenalty = penalty
                         bestRank = rank
                 elif penalty < bestPenalty:
                     bestInterval = (onSegmentation[startIdx][0], onSegmentation[endIdx][0])
-                    bestPenalty = penalty 
-                    bestRank = rank
+                    bestPenalty = penalty
+                    bestRank = rank 
+            if startIdx == endIdx:
+                break
             segmentation.append(bestInterval[0])
             segmentation.append(bestInterval[1])
+            lastGraphSize = len(onSegmentation)
+            del onSegmentation[startIdx : endIdx + 1]
             print ('So far total appends made to the segmentation: ' + str(while_iter)) #dbg
             while_iter += 1 #dbg
-            lastGraphSize = len(onSegmentation)
-            del onSegmentation[startIdx : endIdx]
         segmentation.sort()
         return segmentation
 
@@ -446,11 +455,12 @@ class Segmentation:
         match across the graph.
         Returns (interval, penalty)
         """
+        bestMatch = (0, 0, MAX_PENALTY)
         bestPenalty = MAX_PENALTY
         segLen = len(segment)
         graphLen = len(graph)
         if segLen > graphLen:
-            return (0, 0, MAX_PENALTY)
+            return bestMatch
 
         for idx in range(0, graphLen - segLen):
             currPenalty = self.Compatibility(segment, graph[idx : idx+segLen])
@@ -484,7 +494,9 @@ class Segmentation:
         with steep angles. 
         """
         penalty = 0
-        length = min(len(seg1), len(seg2))
+        len1 = len(seg1)
+        len2 = len(seg2)
+        length = min(len1, len2)
 
         for idx in range(0, length):
             seg1_blue_val = seg1[idx][1]
@@ -517,16 +529,18 @@ class Segmentation:
         # In case one seg is longer than the other: the penalty will be calculated
         # with regards to last known value ofvthe short segment.
         # This method will allow us to pick the closest segment possible
-        if len(seg1) > len(seg2):
-            tail_len = len(seg1)
+        if len1 > len2:
+            tail_len = len1
             tail_seg = seg1
             blue_last_known_val = seg2[last_idx][1]
             red_last_known_val = seg2[last_idx][2]
-        else:
-            tail_len = len(seg2)
+        elif len1 < len2:
+            tail_len = len2
             tail_seg = seg2
             blue_last_known_val = seg1[last_idx][1]
             red_last_known_val = seg1[last_idx][2]
+        else:
+            return penalty
 
         for idx in range(last_idx, tail_len):
             penalty += tail_seg[idx][1] - blue_last_known_val
