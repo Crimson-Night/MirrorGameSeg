@@ -12,8 +12,8 @@ import csv
 
                                 # PARAMETERS #
 """ 
-    These paremeters will be used for fine-tunning of the segmentation algorithem and
-    the GUI suggestions feature.
+    These paremeters will be used for fine-tunning of the segmentation algorithem,
+    the GUI suggestions feature, and the learning process.
 """
 
 LOWEST_PENALTY = 0
@@ -24,24 +24,30 @@ MAX_PENALTY = INFINITY
 DELTA = 1.75
 # How far do we allow two points to be recognized as the same one.
 # Used for both the segmentation compatability calculation and for
-# the suggestion feature.
+# the suggestion feature. This is the max possible value, each point will
+# calculte it's own data according to it's values and environment.
 
 GRANULARITY = 0.02
 PRECISION = 2 # according to the granularity
 ROUND_LIMIT = 0.5 # if >= round up, else round down
 # These 3 paramters should fit the the granularity of the graphs in the data sets.
 
-TRESHOLD_COEF = 30
+
+POOL_BUILD_COEF = 30
+SEGMENTATION_COEF = 1.25
 TRESHOLD = 0
-# The most important feature for the segmentation.
 # We use this paremeter to build our master's pool, which is the key component
 # of the segmentation proces.
-# The greater value is, the pool will be less strict when comparing two segments.
+# The greater the value is, the pool will be less strict when comparing two segments.
 # Lower bound == 0.
-# The treshold will be calculted w.r.t the pool's segement in comparison.
+# The treshold will be calculted w.r.t the pool's segement in comparison on runtime.
+# Each segment's treshold is different according to it's length.
+# This distinction is being made since shorter segments are prone
+# to accumulate less penalty.
 
-PENALTY_MARGIN = 2000
+RANK_WEIGHT = 0.25
 # The higher the value the more weight the algorithm gives to the users's ranking
+# Can take values from [0% - 100%)
 
 
 MAX_SUGGESTIONS = 3 
@@ -225,7 +231,7 @@ class GraphAgent:
         point = RoundValueToGranularity(point)
         delta = self.deltas.get(point)
         if delta == None:
-            Exception("Point is out of graph's bounds")
+            raise ("Point is out of graph's bounds")
         
         for (interval, rank) in self.ranking:
             if abs(point - interval[0]) <= delta:
@@ -238,6 +244,17 @@ class GraphAgent:
                     break    
 
         return suggestions
+
+    def AquireSegmentLimits (self):
+        least_size = INFINITY
+        greatest_size = 0
+        for (interval, rank) in self.ranking:
+            if interval[1] - interval[0] < least_size:
+                least_size = interval[1] - interval[0]
+            if interval[1] - interval[0] > greatest_size:
+                greatest_size = interval[1] - interval[0]
+            
+        return (int(least_size * (1/GRANULARITY)), int(greatest_size * (1/GRANULARITY)))
 
 
 
@@ -259,6 +276,7 @@ class Segmentation:
         self.log = StringIO()
         self.pool = []
         self.agency = {}
+        self.topRank = 0
         for csvpath in ls(datasetpath + '/*.csv'):
             csvname = csvpath.split(".")[0].split("/")[-1]
             self.agency[csvname] = GraphAgent(ExtractGraphFromCSV(csvpath))
@@ -315,7 +333,7 @@ class Segmentation:
         for agentcsvpath in ls(dirpath + '/*-agent.csv'):
             agentname = agentcsvpath.split('-')[-2].split('/')[-1]
             if agentname not in self.agency:
-                Exception (dirname + 'cache isn\'t compatible with the runtime master, missing agent for ' + agentname)
+                raise  (dirname + 'cache isn\'t compatible with the runtime master, missing agent for ' + agentname)
 
         # BEGIN LOADING
         self.cachename = dirname
@@ -331,13 +349,15 @@ class Segmentation:
                     self.agency[agentname].ranking.append((interval, rank))
             self.agency[agentname].ranking.sort(reverse=True, key=ByRank)
 
-        # load master's pool  
+        # load master's pool
         self.pool.clear()
         with open (dirpath + '/master-pool.csv', 'r') as poolcsv:
             segment = []
             for line in csv.reader(poolcsv, delimiter=','):
                 if "rank" in line[0]:
                     rank = int(line[0].split(' = ')[1])
+                    if self.topRank < rank:
+                        self.topRank = rank
                     self.pool.append((segment, rank))
                     segment = []
                 else:
@@ -347,6 +367,8 @@ class Segmentation:
         
 
     def LearningSession(self, sessioncsvpath):
+        global TRESHOLD
+
         trained = self.TrainAgents(sessioncsvpath)
         for graphname, agent in self.agency.items():
             if graphname in trained:
@@ -357,7 +379,7 @@ class Segmentation:
                     if not self.pool:
                         TRESHOLD = LOWEST_PENALTY
                     else:
-                        TRESHOLD = TRESHOLD_COEF * len(self.pool[bestMatchIdx][0])
+                        TRESHOLD = POOL_BUILD_COEF * len(self.pool[bestMatchIdx][0])
                     if penalty <= TRESHOLD:
                         knownSeg = self.pool[bestMatchIdx][0]
                         knownRank = self.pool[bestMatchIdx][1]
@@ -397,49 +419,50 @@ class Segmentation:
             return trained
 
 
-    def Run(self, graph):
+    def Run(self, graph, name):
         """
         This is where the segmentation happens.
         Takes a graph and finds the most desirable way to
         split it to intervals according to pre-learnt pool.
         The returned object is a list of slicing points.
         """
+        global TRESHOLD
+
+        (lowerBound, greaterBound) = self.agency[name].AquireSegmentLimits()
+
         segmentation = []
-        lastGraphSize = INFINITY
-        onSegmentation = graph[:]
-        while_iter = 1 #dbg
-        while len(onSegmentation) != lastGraphSize:
-            bestInterval = ()
+
+        idx = 0
+        chosenPoolList = []
+        while idx < len(graph):
+            bestInterval = (0, 1)
             bestPenalty = MAX_PENALTY
-            bestRank = 0
-            for_iter = 1 #dbg
-            for (segment, rank) in self.pool:
-                print ('Scanning #' + str(for_iter) + ' segment on the graph.') #dbg
-                for_iter += 1 #dbg
-                (startIdx, endIdx, penalty) = self.ScanGraphForMatch(segment, onSegmentation)
-                print ('penalty is '+ str(penalty))
-                print ('best penalty is '+ str(bestPenalty))
-                print ('interval: ')
-                print (startIdx)
-                print (endIdx)
-                if abs(penalty - bestPenalty) < PENALTY_MARGIN:
-                    # Ranking out weights
-                    if rank > bestRank:
-                        bestInterval = (onSegmentation[startIdx][0], onSegmentation[endIdx][0])
-                        bestPenalty = penalty
-                        bestRank = rank
-                elif penalty < bestPenalty:
-                    bestInterval = (onSegmentation[startIdx][0], onSegmentation[endIdx][0])
-                    bestPenalty = penalty
-                    bestRank = rank 
-            if startIdx == endIdx:
-                break
+            chosenPoolIdx = -1
+            size_save = 0 # for advancing the index
+            for size in range (lowerBound, greaterBound + 1):
+                (bestMatchIdx, bestMatchPenalty) = self.ScanPoolForMatch(graph[idx : idx + size])
+                if bestMatchPenalty < bestPenalty:
+                    try:
+                        bestInterval = (graph[idx][0], graph[idx + size][0])
+                    except IndexError:
+                        bestInterval = (graph[idx][0], graph[len(graph) - 1][0])
+                    bestPenalty = bestMatchPenalty
+                    chosenPoolIdx = bestMatchIdx
+                    size_save = size
             segmentation.append(bestInterval[0])
             segmentation.append(bestInterval[1])
-            lastGraphSize = len(onSegmentation)
-            del onSegmentation[startIdx : endIdx + 1]
-            print ('So far total appends made to the segmentation: ' + str(while_iter)) #dbg
-            while_iter += 1 #dbg
+            if chosenPoolIdx > 0 :
+                chosenPoolList.append(chosenPoolIdx)
+            idx += size_save # advance the search on the graph
+
+        # We want to reinforce the chosen segments from the pool by increasing their rank
+        # This way the master agent can learn from himself.
+        for idx in chosenPoolList:
+            segment = self.pool[idx][0]
+            prev_rank = self.pool[idx][1]
+            self.pool[idx] = (segment, prev_rank + 1)
+        self.pool.sort(reverse=True, key=ByRank)
+        segmentation = list(set(segmentation)) # clear the duplicates
         segmentation.sort()
         return segmentation
 
@@ -447,26 +470,6 @@ class Segmentation:
     def MakeSuggestions(self, graphname, point):
         agent = self.agency[graphname]
         return agent.Suggest(point)
-
-
-    def ScanGraphForMatch(self, segment, graph):
-        """
-        Takes a segment from the pool and searches for the best
-        match across the graph.
-        Returns (interval, penalty)
-        """
-        bestMatch = (0, 0, MAX_PENALTY)
-        bestPenalty = MAX_PENALTY
-        segLen = len(segment)
-        graphLen = len(graph)
-        if segLen > graphLen:
-            return bestMatch
-
-        for idx in range(0, graphLen - segLen):
-            currPenalty = self.Compatibility(segment, graph[idx : idx+segLen])
-            if currPenalty < bestPenalty:
-                bestMatch = (idx, idx + segLen, currPenalty)
-        return bestMatch
 
 
     def ScanPoolForMatch(self, segment):
@@ -477,11 +480,14 @@ class Segmentation:
         bestMatchIdx = 0
         bestPenalty = MAX_PENALTY
         
-        for idx, currSeg in enumerate(self.pool):
-            currPenalty = self.Compatibility(currSeg[0], segment)
-            if currPenalty < bestPenalty:
+        for (idx, (poolSeg, rank)) in enumerate(self.pool):
+            penalty = self.Compatibility(poolSeg, segment)
+            # This is where the users' ranking make the difference.
+            # High rank will deminish the penalty.
+            penalty = penalty * (rank/self.topRank) * RANK_WEIGHT
+            if penalty < bestPenalty:
                 bestMatchIdx = idx
-                bestPenalty = currPenalty
+                bestPenalty = penalty
         return (bestMatchIdx, bestPenalty)
 
 
@@ -504,13 +510,13 @@ class Segmentation:
             seg1_blue_deg = seg1[idx][3]
             seg1_red_deg = seg1[idx][4]
             if seg1_blue_deg == 90 or seg1_red_deg == 90:
-                Exception("Pool segment has undefined degree")
+                raise ("Pool segment has undefined degree")
             seg2_blue_val = seg2[idx][1]
             seg2_red_val = seg2[idx][2]
             seg2_blue_deg = seg2[idx][3]
             seg2_red_deg = seg2[idx][4]
             if seg2_blue_deg == 90 or seg2_red_deg == 90:
-                Exception("Pool segment has undefined degree")
+                raise ("Pool segment has undefined degree")
 
             blue_val_diff = abs(seg2_blue_val - seg1_blue_val)
             red_val_diff = abs(seg2_red_val - seg1_red_val)
@@ -618,20 +624,41 @@ class Segmentation:
 # --------------------------------------------------------------------------- #
 def main():
     """
-        Pick a graph and run the segmentation on it.
+        Applies segmentation on a graph.
+        Possible arguments (1 <= i <= 10):
+        i   -   experts_[1]_trial_i
     """
-    graph = ExtractGraphFromCSV('./datasets/dataset-main/experts_[1]_trial_1.csv')
-    start = time.time()
+    graph_id = int(sys.argv[1])
+    if graph_id < 1 or graph_id > 10:
+        raise 'Invalid argument. Please provide the segemntation a number between 1 and 10.'
+        
+
+    graphname = 'experts_[1]_trial_' + str (graph_id)
+    csvpath = './datasets/dataset-main/' + graphname + '.csv'
+    graph = ExtractGraphFromCSV(csvpath)
 
     master = Segmentation('datasets/dataset-main')
     master.Load('master-main')
 
-    segmentation = master.Run(graph)
-    print ('The segmentation for graph is:\n')
-    print (str(segmentation))
+    print ('Running segmentation on graph ' + graphname + '.')
+    print ('Hang on, this could take a minute or two.')
 
+    start = time.time()
+    segmentation = master.Run(graph, graphname)
     end = time.time()
-    print('time = ' + str(end - start))
+
+    print ('\nDone!\nsee results.log for the results.')
+
+    with open('./results.log', 'a') as resultfile:
+        date = time.strftime("%d-%m-%y")
+        hour = time.strftime("%H:%M:%S")
+        resultfile.write('Segmented Graph Name: ' + graphname + '\n')
+        resultfile.write('Timestamp: ' + date + '  ' + hour + '\n')
+        resultfile.write('Duration: ' + str (end - start) + ' seconds\n')
+        resultfile.write('Segentation: ' + str (segmentation)+ '\n')
+        resultfile.write('--------------------------------------------------------------------------\n\n')
+
+    
 
 if __name__ == "__main__":
     main()

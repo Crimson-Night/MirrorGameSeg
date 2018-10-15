@@ -53,7 +53,7 @@ FILES_OPTION = False
 
 
 INSTRUCTIONS_ON = True # instructions for user are visible or not
-NUM_TRIALS = 3 # num of manual files set for TESTING_MODE
+NUM_TRIALS = 5 # num of manual files set for TESTING_MODE
 PRINT_LOG = False  # when "True", debug prints are on the way
 
 
