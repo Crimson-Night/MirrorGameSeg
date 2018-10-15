@@ -1,7 +1,6 @@
-# MirrorGameSeg
+# Instructions
 096260 Project
 
-#Instructions
 
 Currently we have 10 graphs in our data set. The master agent is trained on the first 5.
 
