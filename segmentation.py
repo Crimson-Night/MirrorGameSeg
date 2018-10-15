@@ -33,8 +33,9 @@ ROUND_LIMIT = 0.5 # if >= round up, else round down
 # These 3 paramters should fit the the granularity of the graphs in the data sets.
 
 
-POOL_BUILD_COEF = 30
-SEGMENTATION_COEF = 1.25
+POOL_BUILD_COEF = 1.15
+# The lower the coeficient is the more strict the learning process will be.
+
 TRESHOLD = 0
 # We use this paremeter to build our master's pool, which is the key component
 # of the segmentation proces.
@@ -52,6 +53,13 @@ RANK_WEIGHT = 0.25
 
 MAX_SUGGESTIONS = 3 
 # Max number of suggestions offered to a user upon mouse-click
+
+
+DEFAULT_LOWER_BOUND = 4
+# Lower vaule (down to 0) more reliable segmentation and longer runtime.
+DEFAULT_UPPER_BOUND = 20
+# Higher vaule (up to 60) more reliable segmentation and longer runtime.
+
 
 # --------------------------------------------------------------------------- #
                             # Auxilary Functions #
@@ -253,6 +261,10 @@ class GraphAgent:
                 least_size = interval[1] - interval[0]
             if interval[1] - interval[0] > greatest_size:
                 greatest_size = interval[1] - interval[0]
+        
+        if least_size == INFINITY or greatest_size == 0:
+            least_size = DEFAULT_LOWER_BOUND
+            greatest_size = DEFAULT_UPPER_BOUND
             
         return (int(least_size * (1/GRANULARITY)), int(greatest_size * (1/GRANULARITY)))
 
@@ -276,7 +288,7 @@ class Segmentation:
         self.log = StringIO()
         self.pool = []
         self.agency = {}
-        self.topRank = 0
+        self.topRank = 1
         for csvpath in ls(datasetpath + '/*.csv'):
             csvname = csvpath.split(".")[0].split("/")[-1]
             self.agency[csvname] = GraphAgent(ExtractGraphFromCSV(csvpath))
@@ -428,18 +440,24 @@ class Segmentation:
         """
         global TRESHOLD
 
-        (lowerBound, greaterBound) = self.agency[name].AquireSegmentLimits()
+        (lowerBound, upperBound) = self.agency[name].AquireSegmentLimits()
 
         segmentation = []
+        chosenPoolList = []
 
         idx = 0
-        chosenPoolList = []
         while idx < len(graph):
             bestInterval = (0, 1)
             bestPenalty = MAX_PENALTY
             chosenPoolIdx = -1
             size_save = 0 # for advancing the index
-            for size in range (lowerBound, greaterBound + 1):
+            for size in range (lowerBound, upperBound + 1):
+                # Sanity progress bar
+                progress = (idx / len(graph)) + (size / (upperBound - lowerBound)) * 0.1
+                sys.stdout.write('\r')
+                sys.stdout.write("Progress: [{:<{}}] {:.0f}%".format("=" * int(40 * progress), 40, progress * 100))
+                sys.stdout.flush()
+
                 (bestMatchIdx, bestMatchPenalty) = self.ScanPoolForMatch(graph[idx : idx + size])
                 if bestMatchPenalty < bestPenalty:
                     try:
@@ -464,6 +482,11 @@ class Segmentation:
         self.pool.sort(reverse=True, key=ByRank)
         segmentation = list(set(segmentation)) # clear the duplicates
         segmentation.sort()
+
+        sys.stdout.write('\r')
+        sys.stdout.write("Progress: [{:<{}}] {:.0f}%".format("=" * int(40 * 1), 40, 1 * 100))
+        sys.stdout.flush()
+
         return segmentation
 
 
@@ -641,7 +664,7 @@ def main():
     master.Load('master-main')
 
     print ('Running segmentation on graph ' + graphname + '.')
-    print ('Hang on, this could take a minute or two.')
+    print ('Hang on, this could take a few minutes.')
 
     start = time.time()
     segmentation = master.Run(graph, graphname)
