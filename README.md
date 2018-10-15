@@ -23,6 +23,6 @@ To run the GUI and contribute your input as a learning session do the following:
     to apply the segmentation to.
     
     Remember: The master is trained only on the first 5 graphs, the rest of them are a wild card.
-    Also, when running the segmentation on a graph, the master will go thorugh self learning with respects to
+    Also, when running the segmentation on a graph, the master will go throught self learning with respects to
     his own decisions made during the segmentaion process.
     Check results.log to see what you got.
